@@ -8,7 +8,7 @@ there is this common situaion in MRMC design that
 1. the dependent variable $y_case$, that only varies across cases, having the same value for different readers. i.e., y_case has zero across reader variation. 
 1. while the independent variable $x$ is a measurement on image that varies across both case and reader.
 
-
+when outcome y is binary, the obvious choice is ROC and AUC for MRMC when x is a score or continuous, or sens, spec for MRMC when x is binary.
 
 it is wrong to model as 
 
