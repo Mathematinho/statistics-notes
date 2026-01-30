@@ -13,19 +13,23 @@ dat <- data.frame(
   reader = rep(rep(1:n_reader,each=n_subject),length(modality)),
   mod = rep(modality,each=n_subject*n_reader),
   subject = rep(1:(n_subject),n_reader*length(modality)),
-  noise = rnorm(n_subject* n_reader*length(modality),0,0.5),
+  noise = rnorm(n_subject*length(modality),0,0.5),
   var_subject = rep(rnorm(n_subject,0,.5),n_reader*length(modality)),
   var_reader = rep(rnorm(n_reader,0,.5),each=n_subject) %>% rep(length(modality))) %>%
   mutate(score = ref + var_subject + var_reader + 0.5*ref*(mod==2)+noise,
          score_clean = ref + var_subject + 0.5*ref*(mod==2)+noise) %>%
-  mutate(across(c(reader,subject),factor))
-
-dat <- dat %>% 
+  mutate(score_avg = mean(score),.by=c(subject,mod)) %>%
+  mutate(across(c(reader,subject),factor)) %>% 
   filter(mod == 1)
 
 # without reader variation
 unbiased_fit <- glm(ref ~ score_clean, data=dat %>% filter(reader==1), family=binomial)
 summary(unbiased_fit)
+
+#averaged reader
+avg_fit <- glm(ref ~ score_avg, data=dat %>% filter(reader==1), family=binomial)
+summary(avg_fit)
+
 
 #model each reader separately
 for (i in 1:n_reader){
@@ -76,5 +80,3 @@ dat$pred_score <- predict(latent_score, re.form=~(1 | subject))
 hier_fit <- glm(ref ~ pred_score, data=dat %>% filter(reader==1), family=binomial)
 summary(hier_fit)
 
-avg_fit <- glm(ref ~ score, data=dat %>% group_by(subject) %>% summarise(score=mean(score), ref=first(ref)), family=binomial)
-summary(avg_fit)
