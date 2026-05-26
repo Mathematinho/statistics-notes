@@ -2,6 +2,13 @@ library(tidyverse)
 library(lmerTest)
 library(geepack)
 library(MRMCaov)
+library(gtsummary)
+
+show_est <- function(x,label_name){
+  tbl_regression(x,conf.int=F,
+                 label = score ~ label_name)%>%
+    modify_column_unhide(column = std.error)
+}
 
 n_reader = 3
 n_subject = 100
@@ -13,70 +20,69 @@ dat <- data.frame(
   reader = rep(rep(1:n_reader,each=n_subject),length(modality)),
   mod = rep(modality,each=n_subject*n_reader),
   subject = rep(1:(n_subject),n_reader*length(modality)),
-  noise = rnorm(n_subject*length(modality),0,0.5),
-  var_subject = rep(rnorm(n_subject,0,.5),n_reader*length(modality)),
-  var_reader = rep(rnorm(n_reader,0,.5),each=n_subject) %>% rep(length(modality))) %>%
-  mutate(score = ref + var_subject + var_reader + 0.5*ref*(mod==2)+noise,
-         score_clean = ref + var_subject + 0.5*ref*(mod==2)+noise) %>%
+  var_subject = rep(rnorm(n_subject,0,1),n_reader*length(modality)),
+  var_reader = rep(rnorm(n_reader,0,.3),each=n_subject) %>% rep(length(modality)),
+  var_reader_subject = rnorm(n_subject*n_reader,0,0.1)
+  ) %>%
+  mutate(fixed = ref + var_subject + 0.5*ref*(modality==2),
+         score = fixed + var_reader + var_reader_subject,
+         score_clean = fixed) %>%
   mutate(score_avg = mean(score),.by=c(subject,mod)) %>%
   mutate(across(c(reader,subject),factor)) %>% 
-  filter(mod == 1)
+  filter(mod == 1) %>%
+  mutate(across(c(reader,mod,subject),factor))
 
-# without reader variation
-unbiased_fit <- glm(ref ~ score_clean, data=dat %>% filter(reader==1), family=binomial)
-summary(unbiased_fit)
 
+# without reader variation, fixed effect only
+without_reader_noise <- glm(ref ~ score, data=dat %>% filter(reader==1) %>%
+                      select(ref,score = score_clean), family=binomial)
 #averaged reader
-avg_fit <- glm(ref ~ score_avg, data=dat %>% filter(reader==1), family=binomial)
-summary(avg_fit)
+avg_fit <- glm(ref ~ score, data=dat %>% filter(reader==1) %>%
+                 select(ref,score = score_avg), family=binomial)
+#ignore random effects
+glm_fit <- glm(ref ~ score, data=dat, family=binomial)
 
-
-#model each reader separately
-for (i in 1:n_reader){
-  cat("Reader ", i, "\n")
-  lmer_fit4 <- glm(ref ~ score, data=dat %>% filter(reader == i), family=binomial)
-  print(summary(lmer_fit4))
-}
-
+#weight each observation by the number of readers per subject
+glm_fit_w <- glm(ref ~ score, data=dat %>% group_by(subject) %>% mutate(n=n()) %>% ungroup() %>% mutate(w=1/n), family=binomial, weights=w)
 
 # wrong specification, wrong estimates, does not converge
-lmer_fit1 <- glmer(ref ~ score + (1|reader)  + (1 | subject), data=dat, family=binomial)
-summary(lmer_fit)
+#lmer_fit1 <- glmer(ref ~ score + (1|reader)  + (1 | subject), data=dat, family=binomial)
 
 # model random reader but not random cases
 lmer_fit21 <- glmer(ref ~ score + (1|reader) , data=dat, family=binomial)
-summary(lmer_fit21)
-
 # model random subject but not random readers
 lmer_fit22 <- glmer(ref ~ score + (1|subject) , data=dat, family=binomial)
-summary(lmer_fit22)
-
-#no random effect adjustment
-lmer_fit23 <- glm(ref ~ score, data=dat, family=binomial)
-summary(lmer_fit23)
-
 #correct model but reversed association
 lmer_fit3 <- lmer(score ~ ref + (1|reader)  + (1 | subject), data=dat)
-summary(lmer_fit3)
-
-
 
 # GEE model
-
 #cluster within subjects
-gee_fit1 <- geeglm(ref ~ score, id=subject, data=dat, family=binomial, corstr="exchangeable")
-summary(gee_fit1)
-
+gee_fit1 <- geeglm(ref ~ score, id=subject, data=dat %>% arrange(subject,reader), family=binomial, corstr="exchangeable")
 #cluster within readers
-gee_fit2 <- geeglm(ref ~ score, id=reader, data=dat, family=binomial, corstr="exchangeable")
-summary(gee_fit2)
+gee_fit2 <- geeglm(ref ~ score, id=reader, data=dat %>% arrange(reader,subject), family=binomial, corstr="exchangeable")
 
 #hierachical approach
 
 latent_score <- lmer(score ~ (1|reader)  + (1 | subject), data=dat) 
 #predict as average reader
 dat$pred_score <- predict(latent_score, re.form=~(1 | subject))
+hier_fit <- glm(ref ~ score, data=dat %>% filter(reader==1) %>%
+                  select(ref,score = pred_score), family=binomial)
 
-hier_fit <- glm(ref ~ pred_score, data=dat %>% filter(reader==1), family=binomial)
-summary(hier_fit)
+#show all in one table
+tbl_stack(list(
+  show_est(without_reader_noise,"without reader variation"),
+  show_est(avg_fit,"Average reader"),
+  show_est(glm_fit,"logistic with no rnd eff"),
+  show_est(glm_fit_w,"logistic with no rnd eff, weighted"),
+  show_est(lmer_fit21,"logistic with reader only rnd eff"),
+  show_est(lmer_fit22,"logistic with subject only rnd eff"),
+  show_est(gee_fit1,"GEE with subject cluster"),
+  show_est(gee_fit2,"GEE with reader cluster"),
+  show_est(hier_fit,"Hierarchical approach")
+)
+)
+
+
+
 
